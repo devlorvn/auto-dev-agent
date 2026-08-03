@@ -7,7 +7,7 @@
     "agent": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsup src/cli.ts --format esm --out-dir dist --clean",
     "dev": "tsx src/cli.ts"
   },
   "keywords": [],
@@ -16,7 +16,9 @@
   "type": "module",
   "dependencies": {
     "@langchain/anthropic": "^1.5.2",
+    "@langchain/google-genai": "^2.2.0",
     "@langchain/langgraph": "^1.4.8",
+    "@langchain/openai": "^1.5.5",
     "@octokit/rest": "^22.0.1",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
@@ -26,6 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
+    "tsup": "^8.5.1",
     "tsx": "^4.23.5",
     "typescript": "^7.0.2"
   }

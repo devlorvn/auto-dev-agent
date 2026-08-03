@@ -17,14 +17,23 @@ program
   .command('run')
   .description('Run agent on a specific GitHub issue')
   .requiredOption('-i, --issue <number>', 'GitHub Issue ID', parseInt)
+  .option('-p, --provider <provider>', 'LLM Provider (antigravity-cli, gemini, anthropic, openai, openrouter)', process.env.LLM_PROVIDER || 'anthropic')
+  .option('-m, --model <model>', 'Specific LLM Model Name (e.g. gemini-2.5-flash, claude-3-5-sonnet-20241022)')
+  .option('-k, --api-key <key>', 'API Key for LLM provider')
+  .option('-y, --yes', 'Automatically approve all steps without prompt')
   .action(async (options) => {
     console.log(chalk.bold.cyan(`🚀 Starting Auto-Dev Agent for Issue #${options.issue}...`));
+    console.log(chalk.gray(`   Provider: ${options.provider.toUpperCase()}${options.model ? ` | Model: ${options.model}` : ''}${options.yes ? ' | Mode: Auto-Approve (-y)' : ' | Mode: Interactive (HITL)'}`));
     
     try {
       await agentApp.invoke({
         issueId: options.issue,
         issueTitle: '',
         issueBody: '',
+        provider: options.provider,
+        model: options.model,
+        apiKey: options.apiKey,
+        autoApprove: options.yes || false,
         testPassed: false,
         retryCount: 0,
       });
