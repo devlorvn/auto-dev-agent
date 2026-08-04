@@ -7,6 +7,7 @@ export * from './fs';
 export * from './search';
 export * from './terminal';
 export * from './github';
+export * from './gitnexus';
 
 // Export danh sách công cụ chuẩn cho Agent
 export const allAgentTools = [
