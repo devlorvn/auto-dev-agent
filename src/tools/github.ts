@@ -49,9 +49,14 @@ export async function getGitHubIssue(issueId: number) {
     repo,
     issue_number: issueId,
   });
+  const labels = (issue.labels || [])
+    .map((l: any) => (typeof l === 'string' ? l : l.name || ''))
+    .filter(Boolean);
+
   return {
     title: issue.title,
     body: issue.body || '',
+    labels,
   };
 }
 

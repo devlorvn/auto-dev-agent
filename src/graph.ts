@@ -26,11 +26,30 @@ async function fetchIssueNode(state: AgentState): Promise<Partial<AgentState>> {
   const issue = await getGitHubIssue(state.issueId);
   const profile = detectProjectProfile();
 
+  const labels = issue.labels || [];
+  let issueType: 'feat' | 'fix' = 'fix';
+
+  const hasFeatLabel = labels.some((l) => /feature|enhancement|feat/i.test(l));
+  const hasBugLabel = labels.some((l) => /bug|fix/i.test(l));
+
+  if (hasFeatLabel && !hasBugLabel) {
+    issueType = 'feat';
+  } else if (hasBugLabel) {
+    issueType = 'fix';
+  } else {
+    if (/feat|feature|add|implement/i.test(issue.title)) {
+      issueType = 'feat';
+    }
+  }
+
   console.log(`🔎 Detected Stack: ${profile.language.toUpperCase()} | Test Cmd: "${profile.testCommand}"`);
+  console.log(`🏷️  Issue Labels: [${labels.join(', ')}] | Determined Type: ${issueType.toUpperCase()}`);
 
   return {
     issueTitle: issue.title,
     issueBody: issue.body,
+    labels,
+    issueType,
     profile,
     retryCount: 0,
   };
@@ -169,6 +188,62 @@ async function executeAndTestNode(state: AgentState): Promise<Partial<AgentState
   }
 }
 
+// 3.5 NODE: Review & Summarize Code Changes
+async function reviewChangesNode(state: AgentState): Promise<Partial<AgentState>> {
+  console.log(chalk.bold.cyan('\n🔍 Reviewing Code Changes & Generating File Summary...'));
+
+  try {
+    const { stdout: statusOutput } = await execa('git', ['status', '--short']);
+    const { stdout: diffStatOutput } = await execa('git', ['diff', '--stat']);
+    const { stdout: diffOutput } = await execa('git', ['diff']);
+
+    if (!statusOutput.trim()) {
+      console.log(chalk.gray('ℹ️ No file changes detected in working tree.'));
+      return { changesSummary: 'No file changes detected.' };
+    }
+
+    console.log(chalk.bold.yellow('\n📁 CHANGED FILES (git status):'));
+    console.log(statusOutput);
+
+    console.log(chalk.bold.yellow('\n📊 DIFF STATISTICS:'));
+    console.log(diffStatOutput);
+
+    const llm = getLlm({ provider: state.provider, model: state.model, apiKey: state.apiKey });
+    const prompt = `
+    You are an expert code reviewer analyzing changes made for Issue #${state.issueId}: "${state.issueTitle}".
+    Issue Type: ${state.issueType || 'fix'}
+
+    Original Plan:
+    ${state.plan}
+
+    File Status:
+    ${statusOutput}
+
+    Diff Statistics:
+    ${diffStatOutput}
+
+    Git Patch / Diff (truncated if large):
+    ${diffOutput.slice(0, 8000)}
+
+    Provide a concise, professional summary review of the changes made:
+    - List files added, modified, or deleted with key code changes in each file.
+    - Highlight how the changes resolve Issue #${state.issueId} and satisfy the plan.
+    `;
+
+    const res = await llm.invoke(prompt);
+    const changesSummary = res.content as string;
+
+    console.log(chalk.bold.green('\n📝 AI CHANGES REVIEW & SUMMARY:'));
+    console.log(changesSummary);
+    console.log('\n' + '─'.repeat(50));
+
+    return { changesSummary };
+  } catch (error: any) {
+    console.log(chalk.red(`⚠️ Could not review git diff: ${error.message}`));
+    return { changesSummary: 'Failed to generate git changes summary.' };
+  }
+}
+
 // 4. NODE: Review PR (Human-In-The-Loop)
 async function reviewPRNode(state: AgentState): Promise<Partial<AgentState>> {
   if (state.autoApprove) {
@@ -194,7 +269,11 @@ async function createPRNode(state: AgentState): Promise<Partial<AgentState>> {
   }
 
   console.log('\n🚀 [4/4] Creating Git Branch & Pull Request...');
-  const branchName = `fix/issue-${state.issueId}`;
+
+  const typePrefix = state.issueType === 'feat' ? 'feat' : 'fix';
+  const branchName = `${typePrefix}/issue-${state.issueId}`;
+  const commitMsg = `${typePrefix}: resolve issue #${state.issueId}`;
+  const prTitle = `${typePrefix === 'feat' ? 'Feat' : 'Fix'} #${state.issueId}: ${state.issueTitle}`;
 
   try {
     // Thao tác Git ở local (dùng -B để xử lý trường hợp branch đã tồn tại)
@@ -204,18 +283,23 @@ async function createPRNode(state: AgentState): Promise<Partial<AgentState>> {
     // Kiểm tra xem có thay đổi mới để commit không
     const { stdout: status } = await execa('git', ['status', '--porcelain']);
     if (status.trim()) {
-      await execa('git', ['commit', '-m', `fix: resolve issue #${state.issueId}`]);
+      await execa('git', ['commit', '-m', commitMsg]);
     } else {
       console.log(chalk.gray('ℹ️ Working tree clean, skipping git commit.'));
     }
 
     await execa('git', ['push', '-u', 'origin', branchName]);
 
+    let bodyText = `Auto-generated ${typePrefix} for Issue #${state.issueId} by AI Agent.\n\n### Plan:\n${state.plan}`;
+    if (state.changesSummary) {
+      bodyText += `\n\n### 📝 Changes Summary:\n${state.changesSummary}`;
+    }
+
     // Gọi tool tạo PR trên GitHub
     const prResult = await createPullRequestTool.invoke({
       branchName,
-      title: `Fix #${state.issueId}: ${state.issueTitle}`,
-      body: `Auto-generated fix for Issue #${state.issueId} by AI Agent.\n\n### Plan:\n${state.plan}`,
+      title: prTitle,
+      body: bodyText,
     });
 
     console.log(`🎉 ${prResult}`);
@@ -235,6 +319,8 @@ const workflow = new StateGraph<AgentState>({
     issueId: null,
     issueTitle: null,
     issueBody: null,
+    labels: null,
+    issueType: null,
     provider: null,
     model: null,
     apiKey: null,
@@ -246,12 +332,14 @@ const workflow = new StateGraph<AgentState>({
     plan: null,
     testPassed: null,
     retryCount: null,
+    changesSummary: null,
   },
 })
   .addNode('fetchIssue', fetchIssueNode)
   .addNode('generatePlan', planNode)
   .addNode('reviewPlan', reviewPlanNode)
   .addNode('executeAndTest', executeAndTestNode)
+  .addNode('reviewChanges', reviewChangesNode)
   .addNode('reviewPR', reviewPRNode)
   .addNode('createPR', createPRNode)
   .addEdge('fetchIssue', 'generatePlan')
@@ -264,7 +352,7 @@ const workflow = new StateGraph<AgentState>({
   })
   .addConditionalEdges('executeAndTest', (state) => {
     if (state.testPassed) {
-      return 'reviewPR';
+      return 'reviewChanges';
     }
     if (state.retryCount >= 3) {
       console.log('💥 Max retries reached (3 attempts). Aborting.');
@@ -273,6 +361,7 @@ const workflow = new StateGraph<AgentState>({
     console.log('🔄 Retrying fix flow...');
     return 'executeAndTest';
   })
+  .addEdge('reviewChanges', 'reviewPR')
   .addEdge('reviewPR', 'createPR')
   .addEdge('createPR', END);
 
