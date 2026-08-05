@@ -14,7 +14,10 @@ export async function analyzeCodebaseWithGitNexus(
   issueBody: string,
   cacheTtlMs: number = 10 * 60 * 1000,
 ): Promise<CodeGraphContext> {
-  const query = `${issueTitle} ${issueBody}`.trim().slice(0, 300);
+  const query = `${issueTitle} ${issueBody}`
+    .replace(/[\r\n]+/g, " ")
+    .trim()
+    .slice(0, 300);
 
   // Check in-memory cache
   const cached = memoryCache.get(query);
@@ -38,11 +41,13 @@ export async function analyzeCodebaseWithGitNexus(
     try {
       await execa("gitnexus", ["analyze"], {
         cwd: process.cwd(),
+        shell: true,
         timeout: 15000,
       });
     } catch {
       await execa("npx", ["-y", "gitnexus", "analyze"], {
         cwd: process.cwd(),
+        shell: true,
         timeout: 20000,
       });
     }
@@ -52,6 +57,7 @@ export async function analyzeCodebaseWithGitNexus(
     try {
       const res = await execa("gitnexus", ["query", "--prompt", query], {
         cwd: process.cwd(),
+        shell: true,
         timeout: 15000,
       });
       stdout = res.stdout;
@@ -59,7 +65,7 @@ export async function analyzeCodebaseWithGitNexus(
       const res = await execa(
         "npx",
         ["-y", "gitnexus", "query", "--prompt", query],
-        { cwd: process.cwd(), timeout: 20000 },
+        { cwd: process.cwd(), shell: true, timeout: 20000 },
       );
       stdout = res.stdout;
     }

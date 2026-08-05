@@ -17,8 +17,11 @@ program
 
 program
   .command("run")
-  .description("Run agent on a specific GitHub issue")
-  .requiredOption("-i, --issue <number>", "GitHub Issue ID", parseInt)
+  .description(
+    "Run agent on a specific GitHub issue or local Markdown task file",
+  )
+  .option("-i, --issue <number>", "GitHub Issue ID", parseInt)
+  .option("-f, --file <path>", "Path to local task Markdown file (.md)")
   .option(
     "-p, --provider <provider>",
     "LLM Provider (antigravity-cli, gemini, anthropic, openai, openrouter)",
@@ -47,16 +50,28 @@ program
     "auto",
   )
   .action(async (options) => {
+    if (!options.issue && !options.file) {
+      console.error(
+        chalk.red(
+          "❌ Error: Please specify either a GitHub Issue ID (-i <number>) or a local Markdown task file (-f <path>).",
+        ),
+      );
+      process.exit(1);
+    }
+
     const config = resolveConfig({
       maxRetries: options.maxRetries,
       tokenMode: options.tokenMode,
       enableSubagents: options.subagents,
     });
 
+    const taskSource = options.file ? "file" : "github";
+    const targetDesc = options.file
+      ? `Task File "${options.file}"`
+      : `Issue #${options.issue}`;
+
     console.log(
-      chalk.bold.cyan(
-        `🚀 Starting Auto-Dev Agent for Issue #${options.issue}...`,
-      ),
+      chalk.bold.cyan(`🚀 Starting Auto-Dev Agent for ${targetDesc}...`),
     );
     console.log(
       chalk.gray(
@@ -65,13 +80,15 @@ program
     );
     console.log(
       chalk.gray(
-        `   Config: TokenMode=${config.tokenMode.toUpperCase()} | MaxRetries=${config.maxRetries} | Subagents=${config.enableSubagents}`,
+        `   Config: TaskSource=${taskSource.toUpperCase()} | TokenMode=${config.tokenMode.toUpperCase()} | MaxRetries=${config.maxRetries}`,
       ),
     );
 
     try {
       await agentApp.invoke({
         issueId: options.issue,
+        taskSource,
+        taskFilePath: options.file,
         issueTitle: "",
         issueBody: "",
         provider: options.provider,

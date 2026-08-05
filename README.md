@@ -84,17 +84,26 @@ npm run build
 
 ## 🚀 Hướng Dẫn Sử Dụng CLI
 
-### 1. Chạy Agent sửa lỗi / phát triển tính năng cho Issue
-```bash
-# Chạy mặc định (chế độ Interactive HITL)
-npm run dev -- run -i <ISSUE_NUMBER>
-```
+### 1. Nạp Task từ GitHub Issue HOẶC File Markdown Local (`.md`)
 
-### 2. Các Tùy Chọn Cấu Hình Thông Minh (Smart Configuration)
+- **Chạy với GitHub Issue ID:**
+  ```bash
+  npm run dev -- run -i <ISSUE_NUMBER>
+  ```
+
+- **Chạy với File Markdown Local bất kỳ trong dự án:**
+  ```bash
+  npm run dev -- run -f docs/task.md
+  # hoặc dùng agent link toàn cục:
+  agent run -f ./tasks/feature-spec.md
+  ```
+
+### 2. Các Tùy Chọn Cấu Hình CLI (Command Options)
 
 | Cờ CLI | Mô tả | Mặc định |
 | :--- | :--- | :--- |
-| `-i, --issue <number>` | GitHub Issue ID *(Bắt buộc)* | - |
+| `-i, --issue <number>` | GitHub Issue ID | - |
+| `-f, --file <path>` | Đường dẫn tới file Markdown (.md) chứa yêu cầu Task local | - |
 | `-p, --provider <name>` | LLM Provider (`gemini`, `anthropic`, `openai`, `agy`) | `anthropic` |
 | `-m, --model <name>` | Tên model cụ thể (vd: `gemini-2.5-flash`, `claude-3-5-sonnet-20241022`) | - |
 | `-y, --yes` | Tự động phê duyệt các bước HITL mà không cần hỏi lại | `false` |
@@ -102,9 +111,9 @@ npm run dev -- run -i <ISSUE_NUMBER>
 | `--max-retries <num>` | Giới hạn số lần thử lại TDD/Test khi thất bại | `2` |
 | `--subagents <mode>` | Chế độ thực thi subagent (`auto`, `on`, `off`) | `auto` |
 
-*Ví dụ chạy tối ưu chi phí Token:*
+*Ví dụ nạp Task từ file Markdown local và tối ưu Token:*
 ```bash
-npm run dev -- run -i 15 --token-mode cost-optimized --max-retries 2 -y
+agent run -f docs/gitnexus-superpowers-integration.md --token-mode cost-optimized -y
 ```
 
 ---

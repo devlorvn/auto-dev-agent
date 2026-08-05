@@ -14,7 +14,9 @@ export interface CodeGraphContext {
 }
 
 export interface AgentState {
-  issueId: number;
+  issueId?: number;
+  taskSource?: "github" | "file";
+  taskFilePath?: string;
   issueTitle: string;
   issueBody: string;
   labels?: string[];

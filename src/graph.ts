@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { StateGraph, END } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { execa } from "execa";
@@ -26,16 +28,57 @@ function askQuestion(query: string): Promise<string> {
   );
 }
 
-// 1. NODE: Fetch Issue từ GitHub API
+// 1. NODE: Fetch Task từ GitHub Issue HOẶC local Markdown file (.md)
 async function fetchIssueNode(state: AgentState): Promise<Partial<AgentState>> {
-  console.log(`\n📥 [1/4] Fetching Issue #${state.issueId}...`);
-
-  const issue = await getGitHubIssue(state.issueId);
   const profile = detectProjectProfile();
+  let title = "";
+  let body = "";
+  let labels: string[] = [];
 
-  const labels = issue.labels || [];
+  if (state.taskSource === "file" && state.taskFilePath) {
+    const fullPath = path.resolve(process.cwd(), state.taskFilePath);
+    console.log(
+      `\n📥 [1/4] Loading Task from local Markdown file: "${state.taskFilePath}"...`,
+    );
+
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`Task Markdown file not found at path: ${fullPath}`);
+    }
+
+    const content = fs.readFileSync(fullPath, "utf-8");
+    const lines = content.split("\n");
+
+    const h1Line = lines.find((l) => l.trim().startsWith("# "));
+    if (h1Line) {
+      title = h1Line.replace(/^#\s+/, "").trim();
+    } else {
+      title = path.basename(
+        state.taskFilePath,
+        path.extname(state.taskFilePath),
+      );
+    }
+
+    body = content;
+
+    if (/feature|enhancement|feat/i.test(content)) {
+      labels.push("feature");
+    }
+    if (/bug|fix/i.test(content)) {
+      labels.push("bug");
+    }
+  } else if (state.issueId) {
+    console.log(`\n📥 [1/4] Fetching Issue #${state.issueId} from GitHub...`);
+    const issue = await getGitHubIssue(state.issueId);
+    title = issue.title;
+    body = issue.body;
+    labels = issue.labels || [];
+  } else {
+    throw new Error(
+      "Neither GitHub issue ID (-i) nor local task file path (-f) was provided.",
+    );
+  }
+
   let issueType: "feat" | "fix" = "fix";
-
   const hasFeatLabel = labels.some((l) => /feature|enhancement|feat/i.test(l));
   const hasBugLabel = labels.some((l) => /bug|fix/i.test(l));
 
@@ -44,7 +87,7 @@ async function fetchIssueNode(state: AgentState): Promise<Partial<AgentState>> {
   } else if (hasBugLabel) {
     issueType = "fix";
   } else {
-    if (/feat|feature|add|implement/i.test(issue.title)) {
+    if (/feat|feature|add|implement/i.test(title)) {
       issueType = "feat";
     }
   }
@@ -53,12 +96,12 @@ async function fetchIssueNode(state: AgentState): Promise<Partial<AgentState>> {
     `🔎 Detected Stack: ${profile.language.toUpperCase()} | Test Cmd: "${profile.testCommand}"`,
   );
   console.log(
-    `🏷️  Issue Labels: [${labels.join(", ")}] | Determined Type: ${issueType.toUpperCase()}`,
+    `🏷️  Task Labels: [${labels.join(", ")}] | Determined Type: ${issueType.toUpperCase()}`,
   );
 
   return {
-    issueTitle: issue.title,
-    issueBody: issue.body,
+    issueTitle: title,
+    issueBody: body,
     labels,
     issueType,
     profile,
@@ -192,6 +235,7 @@ async function executeAndTestNode(
 
   CRITICAL:
   - You MUST modify or create the actual target files in the local workspace filesystem.
+  - DO NOT just output recommendations, suggestions, or text outlines. WRITE THE CODE AND EDIT/CREATE THE FILES IMMEDIATELY.
   - Keep modifying code until the test suite passes completely.
   `;
 
@@ -205,23 +249,25 @@ async function executeAndTestNode(
         ),
       );
       const cwd = process.cwd();
-      await execa(
-        "agy",
-        [
-          "--mode",
-          "accept-edits",
-          "--dangerously-skip-permissions",
-          "--add-dir",
-          cwd,
-          "-p",
-          prompt,
-        ],
-        {
-          cwd,
-          stdio: "inherit",
-          env: process.env,
-        },
-      );
+      const cliPrompt = prompt.trim();
+      const agyArgs = [
+        "--mode",
+        "accept-edits",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+        cwd,
+        "-p",
+        cliPrompt,
+      ];
+      if (state.model) {
+        agyArgs.push("--model", state.model);
+      }
+
+      await execa("agy", agyArgs, {
+        cwd,
+        stdio: "inherit",
+        env: process.env,
+      });
     } else {
       const llm = getLlm({
         provider: state.provider,
@@ -357,9 +403,24 @@ async function createPRNode(state: AgentState): Promise<Partial<AgentState>> {
   console.log("\n🚀 [4/4] Creating Git Branch & Pull Request...");
 
   const typePrefix = state.issueType === "feat" ? "feat" : "fix";
-  const branchName = `${typePrefix}/issue-${state.issueId}`;
-  const commitMsg = `${typePrefix}: resolve issue #${state.issueId}`;
-  const prTitle = `${typePrefix === "feat" ? "Feat" : "Fix"} #${state.issueId}: ${state.issueTitle}`;
+  let branchName = "";
+  let commitMsg = "";
+  let prTitle = "";
+
+  if (state.taskSource === "file") {
+    const slug = (state.issueTitle || "task")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 30);
+    branchName = `${typePrefix}/task-${slug || Date.now().toString().slice(-4)}`;
+    commitMsg = `${typePrefix}: ${state.issueTitle}`;
+    prTitle = `${typePrefix === "feat" ? "Feat" : "Fix"}: ${state.issueTitle}`;
+  } else {
+    branchName = `${typePrefix}/issue-${state.issueId}`;
+    commitMsg = `${typePrefix}: resolve issue #${state.issueId}`;
+    prTitle = `${typePrefix === "feat" ? "Feat" : "Fix"} #${state.issueId}: ${state.issueTitle}`;
+  }
 
   try {
     // Thao tác Git ở local (dùng -B để xử lý trường hợp branch đã tồn tại)
@@ -376,7 +437,7 @@ async function createPRNode(state: AgentState): Promise<Partial<AgentState>> {
 
     await execa("git", ["push", "-u", "origin", branchName]);
 
-    let bodyText = `Auto-generated ${typePrefix} for Issue #${state.issueId} by AI Agent.\n\n### Plan:\n${state.plan}`;
+    let bodyText = `Auto-generated ${typePrefix} by AI Agent.\n\n### Plan:\n${state.plan}`;
     if (state.changesSummary) {
       bodyText += `\n\n### 📝 Changes Summary:\n${state.changesSummary}`;
     }
@@ -403,6 +464,8 @@ async function createPRNode(state: AgentState): Promise<Partial<AgentState>> {
 const workflow = new StateGraph<AgentState>({
   channels: {
     issueId: null,
+    taskSource: null,
+    taskFilePath: null,
     issueTitle: null,
     issueBody: null,
     labels: null,
