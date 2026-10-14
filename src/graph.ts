@@ -10,10 +10,21 @@ import { detectProjectProfile } from "./profiler";
 import {
   allAgentTools,
   getGitHubIssue,
+  getJiraIssue,
   createPullRequestTool,
   analyzeCodebaseWithGitNexus,
 } from "./tools/index";
 import { getLlm } from "./llm";
+
+function getIssueReference(state: AgentState): string {
+  if (state.taskSource === "jira") {
+    return `Jira Issue [${state.issueId}]`;
+  }
+  if (state.taskSource === "file") {
+    return `Task "${state.issueTitle}"`;
+  }
+  return `Issue #${state.issueId}`;
+}
 
 function askQuestion(query: string): Promise<string> {
   const rl = readline.createInterface({
@@ -28,7 +39,7 @@ function askQuestion(query: string): Promise<string> {
   );
 }
 
-// 1. NODE: Fetch Task từ GitHub Issue HOẶC local Markdown file (.md)
+// 1. NODE: Fetch Task từ GitHub Issue, Jira Issue, HOẶC local Markdown file (.md)
 async function fetchIssueNode(state: AgentState): Promise<Partial<AgentState>> {
   const profile = detectProjectProfile();
   let title = "";
@@ -66,21 +77,28 @@ async function fetchIssueNode(state: AgentState): Promise<Partial<AgentState>> {
     if (/bug|fix/i.test(content)) {
       labels.push("bug");
     }
+  } else if (state.taskSource === "jira" && state.issueId) {
+    const jiraKey = String(state.issueId);
+    console.log(`\n📥 [1/4] Fetching Issue [${jiraKey}] from Jira...`);
+    const jiraIssue = await getJiraIssue(jiraKey);
+    title = jiraIssue.title;
+    body = jiraIssue.body;
+    labels = jiraIssue.labels || [];
   } else if (state.issueId) {
     console.log(`\n📥 [1/4] Fetching Issue #${state.issueId} from GitHub...`);
-    const issue = await getGitHubIssue(state.issueId);
+    const issue = await getGitHubIssue(Number(state.issueId));
     title = issue.title;
     body = issue.body;
     labels = issue.labels || [];
   } else {
     throw new Error(
-      "Neither GitHub issue ID (-i) nor local task file path (-f) was provided.",
+      "No task source provided. Please specify GitHub issue ID (-i), Jira issue key (-j / --issue-id), or local task file path (-f).",
     );
   }
 
   let issueType: "feat" | "fix" = "fix";
-  const hasFeatLabel = labels.some((l) => /feature|enhancement|feat/i.test(l));
-  const hasBugLabel = labels.some((l) => /bug|fix/i.test(l));
+  const hasFeatLabel = labels.some((l) => /feature|enhancement|feat|story/i.test(l));
+  const hasBugLabel = labels.some((l) => /bug|fix|defect/i.test(l));
 
   if (hasFeatLabel && !hasBugLabel) {
     issueType = "feat";
@@ -98,6 +116,11 @@ async function fetchIssueNode(state: AgentState): Promise<Partial<AgentState>> {
   console.log(
     `🏷️  Task Labels: [${labels.join(", ")}] | Determined Type: ${issueType.toUpperCase()}`,
   );
+  if (state.additionalContext) {
+    console.log(
+      chalk.cyan(`📄 Attached Additional Context (${state.additionalContext.length} chars)`),
+    );
+  }
 
   return {
     issueTitle: title,
@@ -130,10 +153,11 @@ async function planNode(state: AgentState): Promise<Partial<AgentState>> {
     apiKey: state.apiKey,
   });
 
+  const issueRef = getIssueReference(state);
   let prompt = `
   You are an expert software engineer working on a ${state.profile?.language} codebase.
   
-  Issue #${state.issueId}: ${state.issueTitle}
+  ${issueRef}: ${state.issueTitle}
   Description:
   ${state.issueBody}
   `;
@@ -216,8 +240,9 @@ async function executeAndTestNode(
   ).toLowerCase();
   const testCmd = state.profile?.testCommand || "npm test";
 
+  const issueRef = getIssueReference(state);
   const prompt = `
-  You are fixing Issue #${state.issueId}: "${state.issueTitle}".
+  You are fixing ${issueRef}: "${state.issueTitle}".
   Description: ${state.issueBody}
   ${state.additionalContext ? `Additional User Guidance: ${state.additionalContext}` : ""}
 
@@ -331,8 +356,9 @@ async function reviewChangesNode(
       model: state.model,
       apiKey: state.apiKey,
     });
+    const issueRef = getIssueReference(state);
     const prompt = `
-    You are an expert code reviewer analyzing changes made for Issue #${state.issueId}: "${state.issueTitle}".
+    You are an expert code reviewer analyzing changes made for ${issueRef}: "${state.issueTitle}".
     Issue Type: ${state.issueType || "fix"}
 
     Original Plan:
@@ -349,7 +375,7 @@ async function reviewChangesNode(
 
     Provide a concise, professional summary review of the changes made:
     - List files added, modified, or deleted with key code changes in each file.
-    - Highlight how the changes resolve Issue #${state.issueId} and satisfy the plan.
+    - Highlight how the changes resolve ${issueRef} and satisfy the plan.
     `;
 
     const res = await llm.invoke(prompt);
@@ -416,6 +442,11 @@ async function createPRNode(state: AgentState): Promise<Partial<AgentState>> {
     branchName = `${typePrefix}/task-${slug || Date.now().toString().slice(-4)}`;
     commitMsg = `${typePrefix}: ${state.issueTitle}`;
     prTitle = `${typePrefix === "feat" ? "Feat" : "Fix"}: ${state.issueTitle}`;
+  } else if (state.taskSource === "jira") {
+    const safeKey = String(state.issueId).replace(/[^a-zA-Z0-9_-]/g, "");
+    branchName = `${typePrefix}/${safeKey}`;
+    commitMsg = `${typePrefix}: [${safeKey}] ${state.issueTitle}`;
+    prTitle = `${typePrefix === "feat" ? "Feat" : "Fix"} [${safeKey}]: ${state.issueTitle}`;
   } else {
     branchName = `${typePrefix}/issue-${state.issueId}`;
     commitMsg = `${typePrefix}: resolve issue #${state.issueId}`;
@@ -466,6 +497,7 @@ const workflow = new StateGraph<AgentState>({
     issueId: null,
     taskSource: null,
     taskFilePath: null,
+    additionalContextFile: null,
     issueTitle: null,
     issueBody: null,
     labels: null,

@@ -54,12 +54,31 @@ Nếu bạn không có sẵn `GEMINI_API_KEY`, bạn có thể tạo một API K
 
 ## ⚙️ Cấu Hình Môi Trường (`.env`)
 
-Tạo file `.env` tại thư mục gốc của dự án `auto-dev`:
+Tạo file `.env` tại thư mục gốc của dự án `auto-dev` (hoặc sao chép từ `.env.example`):
 
 ```env
+# ==========================================
+# CẤU HÌNH JIRA INTEGRATION (Mode lấy Issue từ Jira)
+# ==========================================
+# Host URL của Jira (ví dụ: https://mycompany.atlassian.net hoặc https://jira.internal.corp)
+JIRA_HOST=https://your-domain.atlassian.net
+
+# API Token của Jira (hoặc Personal Access Token - PAT)
+# Lấy token Jira Cloud tại: https://id.atlassian.com/manage-profile/security/api-tokens
+JIRA_API_TOKEN=your_jira_api_token_here
+
+# Email tài khoản Jira (bắt buộc đối với Jira Cloud Basic Auth)
+JIRA_EMAIL=your-email@example.com
+
+# ==========================================
+# CẤU HÌNH GITHUB INTEGRATION
+# ==========================================
 # Tên GitHub Repository bạn muốn làm việc (dạng owner/repo)
 GITHUB_REPO=owner/your-repo-name
 
+# ==========================================
+# CẤU HÌNH LLM PROVIDER
+# ==========================================
 # LLM Provider mặc định (gemini | anthropic | openai | openrouter | antigravity-cli)
 LLM_PROVIDER=gemini
 GEMINI_MODEL=gemini-2.5-flash
@@ -84,26 +103,55 @@ npm run build
 
 ## 🚀 Hướng Dẫn Sử Dụng CLI
 
-### 1. Nạp Task từ GitHub Issue HOẶC File Markdown Local (`.md`)
+### 1. Các Chế Độ Nạp Task (Modes)
+
+Auto-Dev hỗ trợ 3 nguồn nạp task linh hoạt:
+
+- **Chạy với Jira Issue Key / ID:**
+  ```bash
+  npm run dev -- run -j PROJ-123
+  # hoặc dùng generic --issue-id:
+  npm run dev -- run --mode jira --issue-id PROJ-123
+  ```
+
+- **Chạy với File Ngữ Cảnh Bổ Sung (`--additional-context` / `-c`):**
+  File markdown/text mô tả chi tiết thêm về issue, hướng dẫn kỹ thuật, tài liệu API, hoặc business context:
+  ```bash
+  npm run dev -- run -j PROJ-123 -c docs/additional-context.md
+  # hoặc dùng full option:
+  npm run dev -- run -j PROJ-123 --additional-context ./specs/login-fix-notes.md
+  ```
 
 - **Chạy với GitHub Issue ID:**
   ```bash
   npm run dev -- run -i <ISSUE_NUMBER>
+  # có thể kèm thêm context:
+  npm run dev -- run -i 42 -c docs/extra-notes.md
   ```
 
-- **Chạy với File Markdown Local bất kỳ trong dự án:**
+- **Chạy với File Markdown Task Local:**
   ```bash
   npm run dev -- run -f docs/task.md
   # hoặc dùng agent link toàn cục:
-  agent run -f ./tasks/feature-spec.md
+  agent run -f ./tasks/feature-spec.md -c ./context.md
   ```
+
+---
 
 ### 2. Các Tùy Chọn Cấu Hình CLI (Command Options)
 
 | Cờ CLI | Mô tả | Mặc định |
 | :--- | :--- | :--- |
+| `-j, --jira <key>` | Jira Issue Key hoặc ID (vd: `PROJ-123`, `BUG-404`) | - |
+| `--issue-id <id>` | ID issue tổng quát (dùng cho Jira key hoặc GitHub number) | - |
 | `-i, --issue <number>` | GitHub Issue ID | - |
 | `-f, --file <path>` | Đường dẫn tới file Markdown (.md) chứa yêu cầu Task local | - |
+| `-c, --additional-context <path>` | Đường dẫn file ngữ cảnh bổ sung (.md, .txt) mô tả thêm về issue | - |
+| `--context <path>` | Alias cho `--additional-context` | - |
+| `--mode <mode>` | Nguồn nạp task: `jira`, `github`, `file` (tự động nhận diện) | Tự động |
+| `--jira-host <url>` | Jira Host URL (ghi đè biến môi trường `JIRA_HOST`) | - |
+| `--jira-token <token>` | Jira API Token (ghi đè `JIRA_API_TOKEN`) | - |
+| `--jira-email <email>` | Jira User Email (ghi đè `JIRA_EMAIL`) | - |
 | `-p, --provider <name>` | LLM Provider (`gemini`, `anthropic`, `openai`, `agy`) | `anthropic` |
 | `-m, --model <name>` | Tên model cụ thể (vd: `gemini-2.5-flash`, `claude-3-5-sonnet-20241022`) | - |
 | `-y, --yes` | Tự động phê duyệt các bước HITL mà không cần hỏi lại | `false` |
@@ -111,9 +159,9 @@ npm run build
 | `--max-retries <num>` | Giới hạn số lần thử lại TDD/Test khi thất bại | `2` |
 | `--subagents <mode>` | Chế độ thực thi subagent (`auto`, `on`, `off`) | `auto` |
 
-*Ví dụ nạp Task từ file Markdown local và tối ưu Token:*
+*Ví dụ nạp Jira Issue kèm Context File và tự động phê duyệt:*
 ```bash
-agent run -f docs/gitnexus-superpowers-integration.md --token-mode cost-optimized -y
+agent run -j PROJ-105 -c ./context/auth-spec.md --token-mode cost-optimized -y
 ```
 
 ---
@@ -122,26 +170,26 @@ agent run -f docs/gitnexus-superpowers-integration.md --token-mode cost-optimize
 
 ```mermaid
 flowchart TD
-    A[📥 1. Fetch GitHub Issue & Labels] --> B[🧬 2. GitNexus AST & Blast Radius Analysis]
-    B --> C[🧠 3. Generate Plan & Strategy]
+    A[📥 1. Fetch Task từ Jira / GitHub / Local File + Additional Context] --> B[🧬 2. GitNexus AST & Blast Radius Analysis]
+    B --> C[🧠 3. Generate Plan & Strategy với Additional Context]
     C --> D[❓ 4. Review Plan - HITL]
     D -->|Approve| E[🛠️ 5. Execute Code & Superpowers TDD Test Loop]
     D -->|Feedback| C
     E --> F[🔍 6. Review Changes & AI File Change Summary]
     F --> G[❓ 7. Review PR Creation - HITL]
-    G -->|Approve| H[🚀 8. Git Commit, Push & Create PR]
+    G -->|Approve| H[🚀 8. Git Commit feat/PROJ-123 & Create PR]
     G -->|Reject| I[Kết thúc local]
     H --> I
 ```
 
-1. **Fetch Issue & Labels**: Lấy thông tin issue và phân loại `feat` / `fix` dựa trên GitHub label.
+1. **Fetch Task & Additional Context**: Lấy thông tin từ Jira REST API (hoặc GitHub / local file) kết hợp nội dung file context bổ sung.
 2. **GitNexus Analysis**: Truy vấn cây cú pháp AST và đồ thị phụ thuộc để xác định danh sách file ảnh hưởng và Blast Radius.
-3. **Generate Plan**: LLM lập kế hoạch sửa lỗi chi tiết dựa trên thông tin tri thức từ GitNexus.
+3. **Generate Plan**: LLM lập kế hoạch sửa lỗi chi tiết dựa trên mô tả issue, additional context và thông tin tri thức từ GitNexus.
 4. **Review Plan (HITL)**: Hỏi ý kiến con người để phê duyệt hoặc bổ sung context cho kế hoạch.
 5. **Execute & Superpowers TDD**: Thực thi sửa code local và lặp kiểm thử TDD đến khi test pass.
 6. **Review Changes**: Tổng hợp danh sách file thay đổi (`git status`), số dòng sửa (`git diff --stat`), và AI review summary.
 7. **Review PR (HITL)**: Hỏi ý kiến con người trước khi đẩy code lên GitHub.
-8. **Create PR**: Tạo branch `feat/issue-ID` hoặc `fix/issue-ID`, commit, push và tạo PR tự động.
+8. **Create PR**: Tự động checkout branch chuẩn (vd `feat/PROJ-123` hoặc `fix/PROJ-123`), commit, push và tạo PR.
 
 ---
 
